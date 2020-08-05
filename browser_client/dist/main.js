@@ -14284,69 +14284,147 @@ module.exports = yeast;
 
 },{}],73:[function(require,module,exports){
 require('./webrtc_peer_client.js');
-},{"./webrtc_peer_client.js":74}],74:[function(require,module,exports){
-const io = require('socket.io-client');
-let Peer = require('simple-peer');
+},{"./webrtc_peer_client.js":76}],74:[function(require,module,exports){
+let started = false;
 
-const socket = io.connect('http://localhost:80');
-let peer;
-const room = 'foo'; // Could prompt for room name: // room = prompt('Enter room name:');
+const createPeerConnection = function (Peer, isInit) {
+  console.log('creating simple peer');
+  const peer = new Peer({
+    initiator: isInit,
+    stream: localStream,
+  });
 
-let localVideo = document.querySelector('#localVideo');
-let remoteVideo = document.querySelector('#remoteVideo');
-let localStream;
+  started = true;
 
-let isChannelReady = false;
-let isInitiator = false;
-let isStarted = false;
-let turnReady; // currently unused
-
-const pcConfig = {
-  iceServers: [
-    {
-      urls: 'stun:stun.l.google.com:19302',
-    },
-  ],
+  // If isInitiator,peer.on'signal' will fire right away, if not it waits for signal
+  // https://github.com/feross/simple-peer#peeronsignal-data--
+  peer.on('signal', (data) => sendSignal(data));
+  peer.on('connect', (data) => logConnection(data));
+  peer.on('stream', (stream) => handleStream(stream));
+  peer.on('error', (err) => handleError(err));
+  peer.on('close', (peer) => handleClose(peer));
 };
 
+const startSignal = function (data) {
+  peer.signal(message.data);
+};
+
+const sendSignal = function (data) {
+  console.log('sending signal');
+
+  sendMessage({
+    type: 'sending signal',
+    data: JSON.stringify(data),
+  });
+};
+
+const logConnection = function (data) {
+  console.log('SIMPLE PEER IS CONNECTED', data);
+};
+
+const handleStream = function (stream) {
+  remoteVideo.srcObject = stream;
+};
+
+const handleError = function (err) {
+  console.log(err);
+};
+
+const handleClose = function (peer) {
+  console.log('Hanging up.');
+  stopPeerConnection(peer);
+  sendMessage('bye'); // this deoesn't do anything right now
+};
+
+const handleRemoteHangup = function (peer) {
+  console.log('Session terminated.');
+  stopPeerConnection(peer);
+  isInitiator = false;
+};
+
+const stopPeerConnection = function (peer) {
+  started = false;
+  peer.destroy();
+  peer = null;
+};
+
+const isStarted = function () {
+  return started;
+};
+
+module.exports = {
+  createPeerConnection: createPeerConnection,
+  isStarted: isStarted,
+};
+
+},{}],75:[function(require,module,exports){
 /////////////////// Client Signal Server Using Socket IO ///////////////////
-
 // starts socket client communication with signal server automatically
-if (room !== '') {
-  socket.emit('create or join', room);
-  console.log('Attempted to create or join room', room);
-}
+const Peer = require('simple-peer');
+const peerClient = require('./peerClient.js');
 
-socket.on('created', (room) => {
+let channelReady = false;
+let initiator = false;
+
+const initSocketClient = function (room, socket) {
+  // create a room
+  socket.on('created', (room) => handleCreated(room));
+
+  // room only holds two clients, can be changed in signal_socket.js
+  socket.on('full', (room) => handleFull(room));
+
+  // called by initiator client only
+  socket.on('join', (room) => handleJoin(room));
+
+  // called by non-initiator client only
+  socket.on('joined', (room) => handleJoined(room));
+
+  // log messages from server
+  socket.on('log', (array) => logServerMessage(array));
+
+  // handle messages received by client
+  socket.on('message', (message) => handleMessage(message));
+
+  // can I put this here ?
+  window.onbeforeunload = initClose();
+
+  // start the connection
+  createOrJoinRoom(room);
+};
+
+// this initiaties the connection
+const createOrJoinRoom = function (room) {
+  if (room !== '') {
+    socket.emit('create or join', room);
+    console.log('Attempted to create or join room', room);
+  }
+};
+
+const handleCreated = function (room) {
   console.log('Created room ' + room);
-  isInitiator = true;
-});
+  initiator = true;
+};
 
-// room only holds two clients, can be changed in signal_socket.js
-socket.on('full', (room) => {
+const handleFull = function (room) {
   console.log('Room ' + room + ' is full');
-});
+};
 
-// called by initiator client only
-socket.on('join', (room) => {
+const handleJoin = function (room) {
   console.log('Another peer made a request to join room ' + room);
   console.log('This peer is the initiator of room ' + room + '!');
-  isChannelReady = true;
-});
+  channelReady = true;
+};
 
-// called by non-initiator client
-socket.on('joined', (room) => {
+const handleJoined = function (room) {
   console.log('joined: ' + room);
-  isChannelReady = true;
-});
+  channelReady = true;
+};
 
-// logs messages from server
-socket.on('log', (array) => {
+const logServerMessage = function (array) {
   console.log.apply(console, array);
-});
+};
 
-// This client receives a message
-socket.on('message', (message) => {
+const handleMessage = function (message) {
   console.log('MESSAGE', message);
 
   if (message.type) {
@@ -14360,21 +14438,74 @@ socket.on('message', (message) => {
   } else if (message.type === 'sending signal') {
     console.log('receiving simple signal data');
 
-    if (!peer) {
-      createPeerConnection(isInitiator);
-      peer.signal(message.data);
+    if (!peerClient.isStarted()) {
+      peerClient.createPeerConnection(Peer, initiator);
+      peerClient.startSignal(message.data);
+      //peer.signal(message.data);
     } else {
-      peer.signal(message.data);
+      peerClient.startSignal(message.data);
+      //   peer.signal(message.data);
     }
   } else if (message === 'bye' && isStarted) {
     handleRemoteHangup();
   }
-});
+};
 
-function sendMessage(message) {
+const sendMessage = function (message) {
   console.log('Client sending message: ', message);
   socket.emit('message', message);
-}
+};
+
+const initClose = function () {
+  sendMessage('bye');
+};
+
+const maybeStart = function () {
+  console.log(
+    '>>>>>>> maybeStart() ',
+    peerClient.isStarted(),
+    localStream,
+    channelReady,
+  );
+  if (
+    !peerClient.isStarted() &&
+    typeof localStream !== 'undefined' &&
+    channelReady
+  ) {
+    console.log('>>>>>> creating peer connection');
+    console.log('isInitiator', initiator);
+
+    peerClient.createPeerConnection(Peer, initiator);
+  }
+};
+
+const isChannelReady = function () {
+  return channelReady;
+};
+
+const isInitiator = function () {
+  return initiator;
+};
+
+module.exports = {
+  initSocketClient: initSocketClient,
+  sendMessage: sendMessage,
+  maybeStart: maybeStart,
+  isChannelReady: isChannelReady,
+  isInitiator: isInitiator,
+};
+
+},{"./peerClient.js":74,"simple-peer":41}],76:[function(require,module,exports){
+const io = require('socket.io-client');
+const socket = io.connect('http://localhost:80');
+
+const room = 'foo'; // Could prompt for room name: // room = prompt('Enter room name:');
+const socketClient = require('./socketClient.js');
+socketClient.initSocketClient(room, socket);
+
+let localVideo = document.querySelector('#localVideo');
+let remoteVideo = document.querySelector('#remoteVideo');
+let localStream;
 
 /////////////////// getUserMedia starts video and starts Simple Peer on Connection  ///////////////////
 
@@ -14392,120 +14523,10 @@ function gotStream(stream) {
   console.log('Adding local stream.');
   localStream = stream;
   localVideo.srcObject = stream;
-  sendMessage('got user media');
-  if (isInitiator) {
-    maybeStart();
+  socketClient.sendMessage('got user media');
+  if (socketClient.isInitiator) {
+    socketClient.maybeStart();
   }
 }
 
-function maybeStart() {
-  console.log(
-    '>>>>>>> maybeStart() ',
-    isStarted,
-    localStream,
-    isChannelReady,
-  );
-  if (
-    !isStarted &&
-    typeof localStream !== 'undefined' &&
-    isChannelReady
-  ) {
-    console.log('>>>>>> creating peer connection');
-    console.log('isInitiator', isInitiator);
-
-    createPeerConnection(isInitiator);
-    isStarted = true;
-  }
-}
-
-window.onbeforeunload = function () {
-  sendMessage('bye');
-};
-
-function createPeerConnection(isInit) {
-  peer = new Peer({
-    initiator: isInit,
-    stream: localStream,
-  });
-  console.log('creating simple peer');
-
-  // If isInitiator,peer.on'signal' will fire right away, if not it waits for signal
-  // https://github.com/feross/simple-peer#peeronsignal-data--
-  peer.on('signal', (data) => sendSignal(data));
-  peer.on('connect', (data) =>
-    console.log('SIMPLE PEER IS CONNECTED', data),
-  );
-  peer.on('error', (err) => console.log(err));
-  peer.on('stream', (stream) => (remoteVideo.srcObject = stream));
-  peer.on('close', () => hangup());
-}
-
-function sendSignal(data) {
-  console.log('sending signal');
-
-  sendMessage({
-    type: 'sending signal',
-    data: JSON.stringify(data),
-  });
-}
-
-function hangup() {
-  console.log('Hanging up.');
-  stop();
-  sendMessage('bye');
-}
-
-function handleRemoteHangup() {
-  console.log('Session terminated.');
-  stop();
-  isInitiator = false;
-}
-
-function stop() {
-  isStarted = false;
-  peer.destroy();
-  peer = null;
-}
-
-/////////////////// Turn Server Used if Not on LocaHost — I have not tested this  ///////////////////
-
-if (
-  location.hostname &&
-  location.hostname !== 'localhost' &&
-  location.hostname !== '127.0.0.1'
-) {
-  requestTurn(
-    'https://computeengineondemand.appspot.com/turn?username=41784574&key=4080218913',
-  );
-}
-
-function requestTurn(turnURL) {
-  let turnExists = false;
-  for (let i in pcConfig.iceServers) {
-    if (pcConfig.iceServers[i].urls.substr(0, 5) === 'turn:') {
-      turnExists = true;
-      turnReady = true;
-      break;
-    }
-  }
-  if (!turnExists) {
-    console.log('Getting TURN server from ', turnURL);
-    // No TURN server. Get one from computeengineondemand.appspot.com:
-    let xhr = new XMLHttpRequest();
-    xhr.onreadystatechange = function () {
-      if (xhr.readyState === 4 && xhr.status === 200) {
-        let turnServer = JSON.parse(xhr.responseText);
-        console.log('Got TURN server: ', turnServer);
-        pcConfig.iceServers.push({
-          urls: 'turn:' + turnServer.username + '@' + turnServer.turn,
-          credential: turnServer.password,
-        });
-        turnReady = true;
-      }
-    };
-    xhr.open('GET', turnURL, true);
-    xhr.send();
-  }
-}
-
-},{"simple-peer":41,"socket.io-client":57}]},{},[73]);
+},{"./socketClient.js":75,"socket.io-client":57}]},{},[73]);
