@@ -1,3 +1,5 @@
+**Yikes! This repository is no longer maintained. See [simple-peer-wrapper](https://github.com/lisajamhoury/simple-peer-wrapper) for the updated / maintained version of this repository.** 
+
 # Browser to Browser Connection with Simple Peer, Socket.io and Express
 
 This combines an Express Server with Socket.io Signal Server, and [Simple Peer](https://github.com/feross/simple-peer).
